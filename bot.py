@@ -236,136 +236,58 @@ class TicketPanelView(discord.ui.View):
     self.add_item(TicketSelect())
 
 
-# --- Giveaway Views & Logic ---
+# --- Giveaway Admin Commands ---
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def gcreate(ctx, channel: discord.TextChannel, time_str: str, winners_count: int, *, prize: str):
+  await ctx.message.delete()
 
-async def end_giveaway_task_logic(bot, guild_id, message_id):
+  seconds = 0
+  if time_str.endswith("s"):
+    seconds = int(time_str[:-1])
+  elif time_str.endswith("m"):
+    seconds = int(time_str[:-1]) * 60
+  elif time_str.endswith("h"):
+    seconds = int(time_str[:-1]) * 3600
+  elif time_str.endswith("d"):
+    seconds = int(time_str[:-1]) * 86400
+  else:
+    await ctx.send("❌ Invalid time format! Use s, m, h, or d (e.g., `30m`, `2h`, `1d`).", delete_after=5)
+    return
+
+  end_time = datetime.now(timezone.utc) + discord.utils.timedelta(seconds=seconds)
+  timestamp_unix = int(end_time.timestamp())
+
+  embed = discord.Embed(
+      title="🎉 **GIVEAWAY** 🎉",
+      description=f"Prize: **{prize}**\nHosted by: {ctx.author.mention}\nWinners: **{winners_count}**\nEnds:  ()",
+      color=discord.Color.gold(),
+      timestamp=discord.utils.utcnow()
+  )
+
+  view = GiveawayView(ctx.guild.id, 0)
+  g_msg = await channel.send(embed=embed, view=view)
+
   data = load_data()
-  g_id_str = str(guild_id)
-  m_id_str = str(message_id)
+  g_id_str = str(ctx.guild.id)
+  m_id_str = str(g_msg.id)
 
-  if g_id_str not in data["giveaways"] or m_id_str not in data["giveaways"][g_id_str]:
-    return
+  if g_id_str not in data["giveaways"]:
+    data["giveaways"][g_id_str] = {}
 
-  g_data = data["giveaways"][g_id_str][m_id_str]
-  if g_data.get("ended", False):
-    return
-
-  g_data["ended"] = True
+  data["giveaways"][g_id_str][m_id_str] = {
+      "prize": prize,
+      "winners_count": winners_count,
+      "end_time": end_time.isoformat(),
+      "channel_id": channel.id,
+      "participants": [],
+      "ended": False
+  }
   save_data(data)
 
-  guild = bot.get_guild(guild_id)
-  if not guild:
-    return
-  channel = guild.get_channel(int(g_data["channel_id"]))
-  if not channel:
-    return
-
-  try:
-    message = await channel.fetch_message(message_id)
-  except Exception:
-    return
-
-  participants = g_data.get("participants", [])
-  winners_count = int(g_data.get("winners_count", 1))
-  prize = g_data.get("prize", "Unknown Prize")
-
-  if len(participants) > 0:
-    actual_winners_count = min(winners_count, len(participants))
-    winners = random.sample(participants, actual_winners_count)
-    winners_mention = ", ".join([f"<@{w}>" for w in winners])
-    
-    embed = message.embeds[0]
-    embed.color = discord.Color.dark_embed()
-    embed.title = "🎉 GIVEAWAY ENDED 🎉"
-    embed.add_field(name="Winners", value=winners_mention, inline=False)
-    
-    view = GiveawayView(guild_id, message_id, ended=True)
-    await message.edit(embed=embed, view=view)
-    await channel.send(f"🎊 Congratulations {winners_mention}! You won the **{prize}**!")
-  else:
-    embed = message.embeds[0]
-    embed.color = discord.Color.dark_embed()
-    embed.title = "🎉 GIVEAWAY ENDED (No Valid Entries) 🎉"
-    embed.add_field(name="Winners", value="No participants entered.", inline=False)
-    
-    view = GiveawayView(guild_id, message_id, ended=True)
-    await message.edit(embed=embed, view=view)
-    await channel.send(f"The giveaway for **{prize}** ended with no participants.")
-
-
-class GiveawayView(discord.ui.View):
-
-  def __init__(self, guild_id, message_id, ended=False):
-    super().__init__(timeout=None)
-    self.guild_id = guild_id
-    self.message_id = message_id
-    if ended:
-      self.join_btn.disabled = True
-      self.end_btn.disabled = True
-
-  @discord.ui.button(label="🎉 Enter Giveaway", style=discord.ButtonStyle.green, custom_id="enter_giveaway_btn")
-  async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-    data = load_data()
-    g_id_str = str(self.guild_id)
-    m_id_str = str(self.message_id)
-
-    if g_id_str not in data["giveaways"] or m_id_str not in data["giveaways"][g_id_str]:
-      await interaction.response.send_message("This giveaway no longer exists in records.", ephemeral=True)
-      return
-
-    g_data = data["giveaways"][g_id_str][m_id_str]
-    if g_data.get("ended", False):
-      await interaction.response.send_message("This giveaway has already ended!", ephemeral=True)
-      return
-
-    if "participants" not in g_data:
-      g_data["participants"] = []
-
-    user_id = interaction.user.id
-    if user_id in g_data["participants"]:
-      g_data["participants"].remove(user_id)
-      save_data(data)
-      await interaction.response.send_message("❌ You have left the giveaway.", ephemeral=True)
-    else:
-      g_data["participants"].append(user_id)
-      save_data(data)
-      await interaction.response.send_message("✅ You have successfully entered the giveaway! Good luck!", ephemeral=True)
-
-  @discord.ui.button(label="End Early", style=discord.ButtonStyle.red, custom_id="end_giveaway_early_btn")
-  async def end_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-    if not interaction.user.guild_permissions.administrator:
-      await interaction.response.send_message("Only Administrators can end giveaways early.", ephemeral=True)
-      return
-
-    await interaction.response.send_message("Ending giveaway...", ephemeral=True)
-    await end_giveaway_task_logic(interaction.client, self.guild_id, self.message_id)
-
-
-@tasks.loop(seconds=15)
-async def check_giveaways():
-  data = load_data()
-  now = datetime.now(timezone.utc)
-  
-  if "giveaways" not in data:
-    return
-
-  updated = False
-  for g_id_str, messages in list(data["giveaways"].items()):
-    for m_id_str, g_data in list(messages.items()):
-      if g_data.get("ended", False):
-        continue
-      
-      end_time = datetime.fromisoformat(g_data["end_time"])
-      if now >= end_time:
-        guild_id = int(g_id_str)
-        message_id = int(m_id_str)
-        await end_giveaway_task_logic(bot, guild_id, message_id)
-        updated = True
-
-  if updated:
-    data = load_data()
-
-
+  view.message_id = g_msg.id
+  await g_msg.edit(view=view)
+  await ctx.send(f"✅ Giveaway successfully started in {channel.mention}!", delete_after=5)
 # --- Appeal Views & Modals ---
 
 class AppealModal(discord.ui.Modal, title="Submit Your Jail Appeal"):
