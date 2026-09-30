@@ -27,7 +27,7 @@ intents.message_content = True
 intents.members = True
 intents.guilds = True
 
-# Changed prefix from ">" to "!"
+# Prefix set to "!"
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 CONFIG_FILE = "config.json"
@@ -42,7 +42,7 @@ def load_data():
         "appeal_cooldowns": {},
         "jail_info": {},
         "giveaways": {},
-        "levels": {},  # Added for leveling system
+        "levels": {},
     }
   with open(CONFIG_FILE, "r") as f:
     data = json.load(f)
@@ -666,8 +666,11 @@ async def setlevelchannel(ctx, channel: discord.TextChannel):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setlevelrole(ctx, level: int):
-  view = LevelRoleView(level)
-  await ctx.send(f"Select role(s) to give automatically when a member reaches **Level {level}**:", view=view)
+  try:
+    view = LevelRoleView(level)
+    await ctx.send(f"👇 Use the dropdown menu below to select role(s) for **Level {level}**:", view=view)
+  except Exception as e:
+    await ctx.send(f"❌ Failed to open the role selection menu: {e}")
 
 
 # --- Ticket System Setup Commands ---
@@ -975,17 +978,13 @@ async def on_message(message):
 
   user_data = data["user_xp"][guild_id].get(user_id, {"xp": 0, "level": 0})
   
-  # Add random XP per message
   user_data["xp"] += random.randint(15, 25)
-  
-  # Calculate required XP for next level (Level * 100 + 100)
   next_level_xp = (user_data["level"] + 1) * 150
   
   if user_data["xp"] >= next_level_xp:
     user_data["level"] += 1
     new_level = user_data["level"]
     
-    # Check if level rewards exist
     lvl_config = data.get("levels", {}).get(guild_id, {})
     notif_channel_id = lvl_config.get("channel_id")
     milestone_roles = lvl_config.get("roles", {}).get(str(new_level), [])
