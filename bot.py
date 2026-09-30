@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import os
 import discord
@@ -27,7 +28,7 @@ intents.guilds = True
 
 bot = commands.Bot(command_prefix=">", intents=intents)
 
-# Database file to save configs and mod stats persistently
+# Database file to save configs, stats, warns, and cooldowns persistently
 CONFIG_FILE = "config.json"
 
 
@@ -35,13 +36,16 @@ def load_data():
   if not os.path.exists(CONFIG_FILE):
     return {
         "guilds": {},
-        "modstats": {},  # Format: {guild_id: {staff_id: {"jails": 0, "mutes": 0, "warns": 0}}}
-        "warns": {},  # Format: {guild_id: {user_id: [list of warning reasons/data]}}
+        "modstats": {},
+        "warns": {},
+        "appeal_cooldowns": {},  # Format: {guild_id: {user_id: timestamp_string}}
     }
   with open(CONFIG_FILE, "r") as f:
     data = json.load(f)
     if "warns" not in data:
       data["warns"] = {}
+    if "appeal_cooldowns" not in data:
+      data["appeal_cooldowns"] = {}
     return data
 
 
@@ -117,11 +121,19 @@ class AppealModal(discord.ui.Modal, title="Submit Your Jail Appeal"):
       )
       return
 
+    # Set 6-hour cooldown upon submission
+    g_id_str = str(self.guild_id)
+    u_id_str = str(interaction.user.id)
+    if g_id_str not in data["appeal_cooldowns"]:
+      data["appeal_cooldowns"][g_id_str] = {}
+    data["appeal_cooldowns"][g_id_str][u_id_str] = discord.utils.utcnow().isoformat()
+    save_data(data)
+
     guild = bot.get_guild(self.guild_id)
     channel = guild.get_channel(int(appeal_channel_id))
 
     # Retrieve cached proof if available
-    proof_url = data.get("temp_proof", {}).get(str(interaction.user.id))
+    proof_url = data.get("temp_proof", {}).get(u_id_str)
 
     embed = discord.Embed(
         title="New Jail Appeal Submitted",
@@ -148,6 +160,30 @@ class AppealButtonView(discord.ui.View):
 
   @discord.ui.button(label="Appeal Jail", style=discord.ButtonStyle.primary, custom_id="appeal_jail_btn")
   async def appeal_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    data = load_data()
+    g_id_str = str(self.guild_id)
+    u_id_str = str(interaction.user.id)
+
+    # Check 6-hour Cooldown
+    cooldowns = data.get("appeal_cooldowns", {}).get(g_id_str, {})
+    last_appeal = cooldowns.get(u_id_str)
+
+    if last_appeal:
+      last_time = datetime.fromisoformat(last_appeal)
+      now = discord.utils.utcnow()
+      elapsed_seconds = (now - last_time).total_seconds()
+      cooldown_limit = 6 * 3600  # 6 hours in seconds
+
+      if elapsed_seconds < cooldown_limit:
+        remaining = int(cooldown_limit - elapsed_seconds)
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        await interaction.response.send_message(
+            f"You are on an appeal cooldown. You must wait **{hours}h {minutes}m** before submitting another appeal.",
+            ephemeral=True,
+        )
+        return
+
     await interaction.response.send_modal(AppealModal(self.guild_id))
 
 
