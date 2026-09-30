@@ -883,7 +883,7 @@ async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided
   log_embed.add_field(name="Reason", value=reason, inline=True)
   await send_log(ctx.guild, log_embed)
 
-  await ctx.send(f>Muted {member.mention} for: {reason}")
+  await ctx.send(f"Muted {member.mention} for: {reason}")
 
 
 @bot.command(name="ms")
@@ -895,7 +895,7 @@ async def modstats(ctx, member: discord.Member = None):
   embed = discord.Embed(title=f"Moderation Statistics for {target}", color=discord.Color.blue())
   embed.add_field(name="Jails Executed", value=stats.get("jails", 0), inline=True)
   embed.add_field(name="Mutes Executed", value=stats.get("mutes", 0), inline=True)
-  embed.add_field(name="Warns Issued", value=stats.get("warns", 0), inline=True)
+  embed.add_field(name="Warns Issued", value=stats.f-get("warns", 0), inline=True)
   await ctx.send(embed=embed)
 
 
