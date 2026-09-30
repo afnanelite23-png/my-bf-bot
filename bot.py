@@ -27,7 +27,8 @@ intents.message_content = True
 intents.members = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix=">", intents=intents)
+# Changed prefix from ">" to "!"
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 CONFIG_FILE = "config.json"
 
@@ -41,6 +42,7 @@ def load_data():
         "appeal_cooldowns": {},
         "jail_info": {},
         "giveaways": {},
+        "levels": {},  # Added for leveling system
     }
   with open(CONFIG_FILE, "r") as f:
     data = json.load(f)
@@ -52,6 +54,10 @@ def load_data():
       data["jail_info"] = {}
     if "giveaways" not in data:
       data["giveaways"] = {}
+    if "modstats" not in data:
+      data["modstats"] = {}
+    if "levels" not in data:
+      data["levels"] = {}
     return data
 
 
@@ -231,6 +237,34 @@ class TicketPanelView(discord.ui.View):
   def __init__(self):
     super().__init__(timeout=None)
     self.add_item(TicketSelect())
+
+
+# --- Leveling Role Milestone Config View & Modal ---
+
+class LevelRoleSelect(discord.ui.RoleSelect):
+  def __init__(self, level: int):
+    super().__init__(placeholder=f"Select role(s) to give at Level {level}...", min_values=1, max_values=5)
+    self.level = level
+
+  async def callback(self, interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    data = load_data()
+    g_id = str(guild_id)
+    if g_id not in data["levels"]:
+      data["levels"][g_id] = {"roles": {}, "channel_id": None}
+
+    selected_role_ids = [r.id for r in self.values]
+    data["levels"][g_id]["roles"][str(self.level)] = selected_role_ids
+    save_data(data)
+
+    role_mentions = ", ".join([r.mention for r in self.values])
+    await interaction.response.send_message(f"✅ Successfully linked role(s) {role_mentions} to **Level {self.level}**!", ephemeral=True)
+
+
+class LevelRoleView(discord.ui.View):
+  def __init__(self, level: int):
+    super().__init__(timeout=180)
+    self.add_item(LevelRoleSelect(level))
 
 
 # --- Giveaway Views & Logic ---
@@ -616,6 +650,26 @@ async def setlogs(ctx, channel: discord.TextChannel):
   await ctx.send(f"Logs channel set to {channel.mention}")
 
 
+# --- Leveling System Config Commands ---
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setlevelchannel(ctx, channel: discord.TextChannel):
+  data = load_data()
+  g_id = str(ctx.guild.id)
+  if g_id not in data["levels"]:
+    data["levels"][g_id] = {"roles": {}, "channel_id": None}
+  data["levels"][g_id]["channel_id"] = channel.id
+  save_data(data)
+  await ctx.send(f"✅ Level-up notification channel set to {channel.mention}")
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setlevelrole(ctx, level: int):
+  view = LevelRoleView(level)
+  await ctx.send(f"Select role(s) to give automatically when a member reaches **Level {level}**:", view=view)
+
+
 # --- Ticket System Setup Commands ---
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -644,7 +698,7 @@ async def setstaffrole(ctx, role: discord.Role):
   await ctx.send(f"Ticket staff role set to {role.mention}")
 
 
-# --- Giveaway Admin Commands (Fixed Name to avoid conflict) ---
+# --- Giveaway Admin Commands ---
 @bot.command(name="gstart")
 @commands.has_permissions(administrator=True)
 async def gcreate(ctx, channel: discord.TextChannel, time_str: str, winners_count: int, *, prize: str):
@@ -732,7 +786,7 @@ async def jail(ctx, member: discord.Member, *, reason: str = "No reason provided
 
   jail_role_id = get_config(ctx.guild.id, "jail_role")
   if not jail_role_id:
-    await ctx.send("Jail role is not set! Use `>setjail @Role` first.")
+    await ctx.send("Jail role is not set! Use `!setjail @Role` first.")
     return
 
   jail_role = ctx.guild.get_role(int(jail_role_id))
@@ -862,6 +916,7 @@ async def check_warns(ctx, member: discord.Member = None):
   await ctx.send(embed=embed)
 
 
+# --- FIXED MUTE COMMAND ---
 @bot.command()
 async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided"):
   if not await check_staff(ctx):
@@ -886,17 +941,75 @@ async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided
   await ctx.send(f"Muted {member.mention} for: {reason}")
 
 
+# --- FIXED MODSTATS COMMAND ---
 @bot.command(name="ms")
 async def modstats(ctx, member: discord.Member = None):
   target = member or ctx.author
   data = load_data()
-  stats = data.get("modstats", {}).get(str(ctx.guild.id), {}).get(str(target.id), {"jails": 0, "mutes": 0, "warns": 0})
+  
+  guild_stats = data.get("modstats", {}).get(str(ctx.guild.id), {})
+  stats = guild_stats.get(str(target.id), {"jails": 0, "mutes": 0, "warns": 0})
 
   embed = discord.Embed(title=f"Moderation Statistics for {target}", color=discord.Color.blue())
   embed.add_field(name="Jails Executed", value=stats.get("jails", 0), inline=True)
   embed.add_field(name="Mutes Executed", value=stats.get("mutes", 0), inline=True)
-  embed.add_field(name="Warns Issued", value=stats.f-get("warns", 0), inline=True)
+  embed.add_field(name="Warns Issued", value=stats.get("warns", 0), inline=True)
   await ctx.send(embed=embed)
+
+
+# --- Leveling Event Handler ---
+@bot.event
+async def on_message(message):
+  if message.author.bot or not message.guild:
+    await bot.process_commands(message)
+    return
+
+  guild_id = str(message.guild.id)
+  user_id = str(message.author.id)
+
+  data = load_data()
+  if "user_xp" not in data:
+    data["user_xp"] = {}
+  if guild_id not in data["user_xp"]:
+    data["user_xp"][guild_id] = {}
+
+  user_data = data["user_xp"][guild_id].get(user_id, {"xp": 0, "level": 0})
+  
+  # Add random XP per message
+  user_data["xp"] += random.randint(15, 25)
+  
+  # Calculate required XP for next level (Level * 100 + 100)
+  next_level_xp = (user_data["level"] + 1) * 150
+  
+  if user_data["xp"] >= next_level_xp:
+    user_data["level"] += 1
+    new_level = user_data["level"]
+    
+    # Check if level rewards exist
+    lvl_config = data.get("levels", {}).get(guild_id, {})
+    notif_channel_id = lvl_config.get("channel_id")
+    milestone_roles = lvl_config.get("roles", {}).get(str(new_level), [])
+
+    if milestone_roles:
+      member = message.guild.get_member(message.author.id)
+      if member:
+        for r_id in milestone_roles:
+          role = message.guild.get_role(int(r_id))
+          if role:
+            try:
+              await member.add_roles(role)
+            except Exception:
+              pass
+
+    if notif_channel_id:
+      channel = message.guild.get_channel(int(notif_channel_id))
+      if channel:
+        await channel.send(f"🎉 Congratulations {message.author.mention}! You leveled up to **Level {new_level}**!")
+
+  data["user_xp"][guild_id][user_id] = user_data
+  save_data(data)
+
+  await bot.process_commands(message)
 
 
 @bot.event
@@ -914,5 +1027,7 @@ if __name__ == "__main__":
   t.daemon = True
   t.start()
 
-  TOKEN = os.environ.get("DIS_TOKEN", "YOUR_BOT_TOKEN_HERE")
+  TOKEN = os.environ.get("DIS_TOKEN")
+  if not TOKEN:
+    raise ValueError("No DIS_TOKEN environment variable found. Please set your bot token in Render's Environment settings.")
   bot.run(TOKEN)
