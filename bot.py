@@ -113,13 +113,62 @@ def add_warn(guild_id, user_id, reason, staff_name):
   save_data(data)
 
 
-# --- Ticket Views ---
+# --- Ticket Views & Claim System ---
 
 
-class TicketCloseView(discord.ui.View):
+class TicketControlView(discord.ui.View):
 
   def __init__(self):
     super().__init__(timeout=None)
+
+  @discord.ui.button(label="Claim Ticket", style=discord.ButtonStyle.primary, custom_id="claim_ticket_btn")
+  async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    guild = interaction.guild
+    staff_role_id = get_config(guild.id, "ticket_staff_role")
+    senior_role_id = get_config(guild.id, "senior_role")
+    staff_role_id_gen = get_config(guild.id, "staff_role")
+
+    # Check if user has permission to claim
+    is_staff = False
+    if interaction.user.guild_permissions.manage_messages:
+      is_staff = True
+    else:
+      role_ids = [r.id for r in interaction.user.roles]
+      if staff_role_id and int(staff_role_id) in role_ids:
+        is_staff = True
+      if senior_role_id and int(senior_role_id) in role_ids:
+        is_staff = True
+      if staff_role_id_gen and int(staff_role_id_gen) in role_ids:
+        is_staff = True
+
+    if not is_staff:
+      await interaction.response.send_message("You do not have permission to claim tickets.", ephemeral=True)
+      return
+
+    channel = interaction.channel
+
+    # Restrict general staff role from sending messages while keeping view permissions
+    if staff_role_id:
+      staff_role = guild.get_role(int(staff_role_id))
+      if staff_role:
+        await channel.set_permissions(staff_role, view_channel=True, send_messages=False, read_message_history=True)
+
+    if staff_role_id_gen and staff_role_id_gen != staff_role_id:
+      gen_role = guild.get_role(int(staff_role_id_gen))
+      if gen_role:
+        await channel.set_permissions(gen_role, view_channel=True, send_messages=False, read_message_history=True)
+
+    # Grant exclusive sending access to the claiming staff member
+    await channel.set_permissions(interaction.user, view_channel=True, send_messages=True, read_message_history=True)
+
+    button.disabled = True
+    button.label = f"Claimed by {interaction.user.name}"
+    button.style = discord.ButtonStyle.secondary
+
+    await interaction.message.edit(view=self)
+    await interaction.response.send_message(
+        f"🔒 Ticket claimed by {interaction.user.mention}. Other staff can view this channel history, but **only you** can send messages."
+    )
 
   @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
   async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -173,7 +222,7 @@ class TicketSelect(discord.ui.Select):
         timestamp=discord.utils.utcnow(),
     )
 
-    view = TicketCloseView()
+    view = TicketControlView()
     staff_ping = f"<@&{staff_role_id}>" if staff_role_id else ""
     
     await ticket_channel.send(content=f"{interaction.user.mention} {staff_ping}", embed=embed, view=view)
@@ -194,11 +243,6 @@ async def end_giveaway_task_logic(bot, guild_id, message_id):
   g_id_str = str(guild_id)
   m_id_str = str(message_id)
 
-  if g_id_str not in data["giveaways"] or m_id_str not in data["giveaways"]["guilds" if "guilds" in data["giveaways"] else g_id_str]:
-    # Try alternate structure lookup check
-    pass
-
-  # Standardize giveaway data store layout under data["giveaways"][g_id_str][m_id_str]
   if g_id_str not in data["giveaways"] or m_id_str not in data["giveaways"][g_id_str]:
     return
 
@@ -297,7 +341,6 @@ class GiveawayView(discord.ui.View):
     await end_giveaway_task_logic(interaction.client, self.guild_id, self.message_id)
 
 
-# Background loop to check active giveaways expiration
 @tasks.loop(seconds=15)
 async def check_giveaways():
   data = load_data()
@@ -627,7 +670,6 @@ async def gcreate(ctx):
     time_str = msg.content
     await msg.delete()
 
-    # Parse time string
     seconds = 0
     if time_str.endswith("s"):
       seconds = int(time_str[:-1])
@@ -668,10 +710,9 @@ async def gcreate(ctx):
       timestamp=discord.utils.utcnow()
   )
 
-  view = GiveawayView(ctx.guild.id, 0) # Message ID set after posting
+  view = GiveawayView(ctx.guild.id, 0)
   g_msg = await channel.send(embed=embed, view=view)
 
-  # Save giveaway into database
   data = load_data()
   g_id_str = str(ctx.guild.id)
   m_id_str = str(g_msg.id)
@@ -689,7 +730,6 @@ async def gcreate(ctx):
   }
   save_data(data)
 
-  # Re-instantiate view with correct message ID context
   view.message_id = g_msg.id
   await g_msg.edit(view=view)
   await ctx.send(f"Giveaway successfully started in {channel.mention}!", delete_after=5)
@@ -900,7 +940,6 @@ async def modstats(ctx, member: discord.Member = None):
 
 @bot.event
 async def on_ready():
-  # Start background loop for giveaway expiration checks
   if not check_giveaways.is_running():
     check_giveaways.start()
   print(f"Logged in as {bot.user} (ID: {bot.user.id})")
