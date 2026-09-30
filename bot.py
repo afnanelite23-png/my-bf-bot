@@ -192,6 +192,8 @@ class TicketSelect(discord.ui.Select):
         discord.SelectOption(label="Giveaway Claim", description="Claim a won giveaway prize", emoji="🎁"),
         discord.SelectOption(label="Giveaway Host", description="Coordinate hosting a giveaway", emoji="🎉"),
         discord.SelectOption(label="Ads/Partnerships", description="Inquiries regarding advertisements or partnerships", emoji="🤝"),
+        discord.SelectOption(label="Buy Decompile", description="Buy Decompiles for Robux", emoji="💸"),
+      
     ]
     super().__init__(placeholder="Select a ticket category...", min_values=1, max_values=1, options=options, custom_id="ticket_dropdown")
 
