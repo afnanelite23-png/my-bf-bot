@@ -34,10 +34,14 @@ def load_data():
   if not os.path.exists(CONFIG_FILE):
     return {
         "guilds": {},
-        "modstats": {},  # Format: {guild_id: {staff_id: {"jails": 0, "mutes": 0, ...}}}
+        "modstats": {},  # Format: {guild_id: {staff_id: {"jails": 0, "mutes": 0, "warns": 0}}}
+        "warns": {},  # Format: {guild_id: {user_id: [list of warning reasons/data]}}
     }
   with open(CONFIG_FILE, "r") as f:
-    return json.load(f)
+    data = json.load(f)
+    if "warns" not in data:
+      data["warns"] = {}
+    return data
 
 
 def save_data(data):
@@ -72,6 +76,18 @@ def add_stat(guild_id, staff_id, action_type):
     data["modstats"][g_id][s_id] = {"jails": 0, "mutes": 0, "warns": 0}
   if action_type in data["modstats"][g_id][s_id]:
     data["modstats"][g_id][s_id][action_type] += 1
+  save_data(data)
+
+
+def add_warn(guild_id, user_id, reason, staff_name):
+  data = load_data()
+  g_id = str(guild_id)
+  u_id = str(user_id)
+  if g_id not in data["warns"]:
+    data["warns"][g_id] = {}
+  if u_id not in data["warns"][g_id]:
+    data["warns"][g_id][u_id] = []
+  data["warns"][g_id][u_id].append({"reason": reason, "staff": str(staff_name)})
   save_data(data)
 
 
@@ -243,10 +259,8 @@ async def jail(ctx, member: discord.Member, *, reason: str = "No reason provided
     await ctx.send("Configured jail role no longer exists.")
     return
 
-  # Grab attachment proof if provided with the message
   proof_url = ctx.message.attachments[0].url if ctx.message.attachments else None
 
-  # Save temporary proof mapping for the appeal embed
   if proof_url:
     data = load_data()
     if "temp_proof" not in data:
@@ -261,7 +275,6 @@ async def jail(ctx, member: discord.Member, *, reason: str = "No reason provided
     await ctx.send(f"Failed to apply jail role: {e}")
     return
 
-  # DM the user
   try:
     dm_embed = discord.Embed(
         title=f"You have been jailed in {ctx.guild.name}",
@@ -302,11 +315,42 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason provided
     return
 
   add_stat(ctx.guild.id, ctx.author.id, "warns")
+  add_warn(ctx.guild.id, member.id, reason, ctx.author)
+
   try:
     await member.send(f"You were warned in **{ctx.guild.name}** for: {reason}")
   except discord.Forbidden:
     pass
   await ctx.send(f"Warned {member.mention} for: {reason}")
+
+
+@bot.command(name="warns")
+async def check_warns(ctx, member: discord.Member = None):
+  if not await check_staff(ctx):
+    await ctx.send("You do not have permission.")
+    return
+
+  target = member or ctx.author
+  data = load_data()
+  user_warns = data.get("warns", {}).get(str(ctx.guild.id), {}).get(str(target.id), [])
+
+  embed = discord.Embed(
+      title=f"Warnings for {target}",
+      description=f"Total Warnings: **{len(user_warns)}**",
+      color=discord.Color.yellow(),
+  )
+
+  if user_warns:
+    for idx, w in enumerate(user_warns, 1):
+      embed.add_field(
+          name=f"Warning #{idx} (By: {w['staff']})",
+          value=w["reason"],
+          inline=False,
+      )
+  else:
+    embed.add_field(name="Record", value="This user has no active warnings.", inline=False)
+
+  await ctx.send(embed=embed)
 
 
 @bot.command()
@@ -316,7 +360,6 @@ async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided
     return
 
   add_stat(ctx.guild.id, ctx.author.id, "mutes")
-  # Simple timeout implementation (default 10 mins if no time string parsed)
   duration = discord.utils.utcnow() + discord.timedelta(minutes=10)
   try:
     await member.timeout(duration, reason=reason)
@@ -342,13 +385,11 @@ async def modstats(ctx, member: discord.Member = None):
 
 # --- Execution Routine ---
 if __name__ == "__main__":
-  # Run Flask server in background thread
   import threading
 
   t = threading.Thread(target=run_flask)
   t.daemon = True
   t.start()
 
-  # Run Discord bot (Replace with your bot token or environment variable)
   TOKEN = os.environ.get("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE")
   bot.run(TOKEN)
