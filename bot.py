@@ -753,6 +753,49 @@ async def gcreate(ctx, channel: discord.TextChannel, time_str: str, winners_coun
   await ctx.send(f"✅ Giveaway successfully started in {channel.mention}!", delete_after=5)
 
 
+# --- Bot Announcement Command for Staff ---
+@bot.command(name="announcebot")
+async def announcebot(ctx):
+  if not await check_staff(ctx):
+    await ctx.send("You do not have permission to use this command.", delete_after=5)
+    return
+
+  try:
+    await ctx.message.delete()
+  except Exception:
+    pass
+
+  embed = discord.Embed(
+      title="🤖 Meet Our New Server Bot!",
+      description=(
+          "We are excited to introduce our brand new server utility and management bot! "
+          "It has been custom-built to improve your experience and streamline server activities."
+      ),
+      color=discord.Color.blurple(),
+      timestamp=discord.utils.utcnow()
+  )
+
+  embed.add_field(
+      name="🛠️ What Can It Do?",
+      value=(
+          "• **Ticket Support:** Open private tickets using our interactive panel.\n"
+          "• **Leveling System:** Earn XP by chatting and unlock exclusive milestone roles.\n"
+          "• **Giveaways:** Participate in exciting community giveaways easily.\n"
+          "• **Moderation & Security:** Keeps the community safe and clean."
+      ),
+      inline=False
+  )
+
+  embed.add_field(
+      name="📌 Quick Tip",
+      value="All bot commands use the prefix `!`. Feel free to explore and enjoy!",
+      inline=False
+  )
+
+  embed.set_footer(text=f"Announcement by {ctx.author}", icon_url=ctx.author.display_avatar.url)
+  await ctx.send(embed=embed)
+
+
 # --- Moderation & Purge Commands ---
 
 @bot.command()
