@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import os
 import random
+import re
 import discord
 from discord.ext import commands, tasks
 from flask import Flask
@@ -192,8 +193,7 @@ class TicketSelect(discord.ui.Select):
         discord.SelectOption(label="Giveaway Claim", description="Claim a won giveaway prize", emoji="🎁"),
         discord.SelectOption(label="Giveaway Host", description="Coordinate hosting a giveaway", emoji="🎉"),
         discord.SelectOption(label="Ads/Partnerships", description="Inquiries regarding advertisements or partnerships", emoji="🤝"),
-        discord.SelectOption(label="Buy Decompile", description="Buy Decompiles for Robux", emoji="💸"),
-      
+        discord.SelectOption(label="Decompile", description="Request code decompilation or uncopylocked file help", emoji="💻"),
     ]
     super().__init__(placeholder="Select a ticket category...", min_values=1, max_values=1, options=options, custom_id="ticket_dropdown")
 
@@ -907,26 +907,36 @@ async def setstaffrole(ctx, role: discord.Role):
 # --- Giveaway Admin Commands ---
 @bot.command(name="gstart")
 @commands.has_permissions(administrator=True)
-async def gcreate(ctx, channel: discord.TextChannel, time_str: str, winners_count: int, *, prize: str):
+async def gstart(ctx, channel: discord.TextChannel, time_str: str, winners_count: int, *, prize: str):
+  # Safely delete command message if permissions allow
+  try:
+    await ctx.message.delete()
+  except Exception:
+    pass
+
   seconds = 0
-  if time_str.endswith("s"):
-    seconds = int(time_str[:-1])
-  elif time_str.endswith("m"):
-    seconds = int(time_str[:-1]) * 60
-  elif time_str.endswith("h"):
-    seconds = int(time_str[:-1]) * 3600
-  elif time_str.endswith("d"):
-    seconds = int(time_str[:-1]) * 86400
-  else:
+  match = re.match(r"(\d+)([smhd])", time_str)
+  if not match:
     await ctx.send("❌ Invalid time format! Use `s`, `m`, `h`, or `d` (e.g., `10m`, `2h`).", delete_after=10)
     return
+
+  amount, unit = match.groups()
+  amount = int(amount)
+  if unit == 's':
+    seconds = amount
+  elif unit == 'm':
+    seconds = amount * 60
+  elif unit == 'h':
+    seconds = amount * 3600
+  elif unit == 'd':
+    seconds = amount * 86400
 
   end_time = datetime.now(timezone.utc) + discord.utils.timedelta(seconds=seconds)
   timestamp_unix = int(end_time.timestamp())
 
   embed = discord.Embed(
       title="🎉 **GIVEAWAY** 🎉",
-      description=f"Prize: **{prize}**\nHosted by: {ctx.author.mention}\nWinners: **{winners_count}**\nEnds:  ()",
+      description=f"Prize: **{prize}**\nHosted by: {ctx.author.mention}\nWinners: **{winners_count}**\nEnds: <t:{timestamp_unix}:R> (<t:{timestamp_unix}:F>)",
       color=discord.Color.gold(),
       timestamp=discord.utils.utcnow()
   )
@@ -956,6 +966,18 @@ async def gcreate(ctx, channel: discord.TextChannel, time_str: str, winners_coun
   await ctx.send(f"✅ Giveaway successfully started in {channel.mention}!", delete_after=5)
 
 
+@gstart.error
+async def gstart_error(ctx, error):
+  if isinstance(error, commands.MissingPermissions):
+    await ctx.send("❌ You do not have permission to use this command.", delete_after=5)
+  elif isinstance(error, commands.MissingRequiredArgument):
+    await ctx.send("❌ Missing arguments! Format: `!gstart #channel duration winners prize`", delete_after=10)
+  elif isinstance(error, commands.BadArgument):
+    await ctx.send("❌ Invalid argument provided (make sure you mention a valid channel and numbers for winners).", delete_after=10)
+  else:
+    print(f"Error in gstart: {error}")
+
+
 # --- Bot Announcement Command for Staff ---
 @bot.command(name="announcebot")
 async def announcebot(ctx):
@@ -981,7 +1003,7 @@ async def announcebot(ctx):
   embed.add_field(
       name="🛠️ What Can It Do?",
       value=(
-          "• **Ticket Support:** Open private tickets using our interactive panel.\n"
+          "• **Ticket Support:** Open private tickets (including Decompile requests) using our interactive panel.\n"
           "• **Applications:** Apply for staff, creator, event, or leaker roles via slash commands.\n"
           "• **Leveling System:** Earn XP by chatting and unlock exclusive milestone roles.\n"
           "• **Giveaways:** Participate in exciting community giveaways easily.\n"
@@ -1282,3 +1304,4 @@ if __name__ == "__main__":
   if not TOKEN:
     raise ValueError("No DIS_TOKEN environment variable found. Please set your bot token in Render's Environment settings.")
   bot.run(TOKEN)
+
