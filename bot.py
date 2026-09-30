@@ -239,6 +239,146 @@ class TicketPanelView(discord.ui.View):
     self.add_item(TicketSelect())
 
 
+# --- Application System Modals & Views ---
+
+class ApplicationModal(discord.ui.Modal):
+  def __init__(self, app_type: str):
+    super().__init__(title=f"Apply for: {app_type}")
+    self.app_type = app_type
+
+    self.q1 = discord.ui.TextInput(
+        label="Why do you want this position/role?",
+        style=discord.TextStyle.long,
+        placeholder="Provide a detailed explanation...",
+        required=True,
+        max_length=500,
+    )
+    self.q2 = discord.ui.TextInput(
+        label="What experience do you have?",
+        style=discord.TextStyle.long,
+        placeholder="List your past experience or skills...",
+        required=True,
+        max_length=500,
+    )
+    self.q3 = discord.ui.TextInput(
+        label="How active are you daily?",
+        style=discord.TextStyle.short,
+        placeholder="e.g., 3-4 hours a day",
+        required=True,
+        max_length=100,
+    )
+    
+    self.add_item(self.q1)
+    self.add_item(self.q2)
+    self.add_item(self.q3)
+
+  async def on_submit(self, interaction: discord.Interaction):
+    guild = interaction.guild
+    app_channel_id = get_config(guild.id, "app_log_channel")
+
+    if not app_channel_id:
+      await interaction.response.send_message("❌ Application review channel has not been set up by staff yet.", ephemeral=True)
+      return
+
+    log_channel = guild.get_channel(int(app_channel_id))
+    if not log_channel:
+      await interaction.response.send_message("❌ Configured application log channel could not be found.", ephemeral=True)
+      return
+
+    embed = discord.Embed(
+        title=f"📄 New Application: {self.app_type}",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
+    embed.add_field(name="Applicant", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+    embed.add_field(name="1. Why do you want this position?", value=self.q1.value, inline=False)
+    embed.add_field(name="2. What experience do you have?", value=self.q2.value, inline=False)
+    embed.add_field(name="3. Daily Activity", value=self.q3.value, inline=False)
+
+    view = ApplicationReviewView(interaction.user.id)
+    await log_channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✅ Your application has been successfully submitted to the staff team!", ephemeral=True)
+
+
+class ApplicationReviewView(discord.ui.View):
+  def __init__(self, applicant_id: int):
+    super().__init__(timeout=None)
+    self.applicant_id = applicant_id
+
+  @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="accept_app_btn")
+  async def accept_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if not interaction.user.guild_permissions.manage_messages:
+      await interaction.response.send_message("You do not have permission to review applications.", ephemeral=True)
+      return
+
+    embed = interaction.message.embeds[0]
+    embed.color = discord.Color.green()
+    embed.add_field(name="Status", value=f"✅ **Accepted** by {interaction.user.mention}", inline=False)
+
+    for child in self.children:
+      child.disabled = True
+
+    await interaction.message.edit(embed=embed, view=self)
+
+    # Try notifying the user
+    guild = interaction.guild
+    member = guild.get_member(self.applicant_id)
+    if member:
+      try:
+        await member.send(f"🎉 Congratulations! Your application in **{guild.name}** has been **ACCEPTED**!")
+      except discord.Forbidden:
+        pass
+
+    await interaction.response.send_message("Application accepted and user notified.", ephemeral=True)
+
+  @discord.ui.button(label="Deny", style=discord.ButtonStyle.red, custom_id="deny_app_btn")
+  async def deny_app(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if not interaction.user.guild_permissions.manage_messages:
+      await interaction.response.send_message("You do not have permission to review applications.", ephemeral=True)
+      return
+
+    embed = interaction.message.embeds[0]
+    embed.color = discord.Color.red()
+    embed.add_field(name="Status", value=f"❌ **Denied** by {interaction.user.mention}", inline=False)
+
+    for child in self.children:
+      child.disabled = True
+
+    await interaction.message.edit(embed=embed, view=self)
+
+    # Try notifying the user
+    guild = interaction.guild
+    member = guild.get_member(self.applicant_id)
+    if member:
+      try:
+        await member.send(f"Hello, thank you for applying to **{guild.name}**. Unfortunately, your application was **DENIED** at this time.")
+      except discord.Forbidden:
+        pass
+
+    await interaction.response.send_message("Application denied and user notified.", ephemeral=True)
+
+
+class ApplicationSelect(discord.ui.Select):
+  def __init__(self):
+    options = [
+        discord.SelectOption(label="Trial Moderator", description="Apply to join the moderation team", emoji="🛡️"),
+        discord.SelectOption(label="Content Creator", description="Apply for content creator or media partner roles", emoji="🎥"),
+        discord.SelectOption(label="Event Host", description="Apply to host community events and minigames", emoji="🎉"),
+        discord.SelectOption(label="Developer", description="Apply to build and maintain server tools", emoji="💻"),
+    ]
+    super().__init__(placeholder="Select an application type...", min_values=1, max_values=1, options=options, custom_id="app_dropdown")
+
+  async def callback(self, interaction: discord.Interaction):
+    await interaction.response.send_modal(ApplicationModal(self.values[0]))
+
+
+class ApplicationPanelView(discord.ui.View):
+  def __init__(self):
+    super().__init__(timeout=None)
+    self.add_item(ApplicationSelect())
+
+
 # --- Leveling Role Milestone Config View & Modal ---
 
 class LevelRoleSelect(discord.ui.RoleSelect):
@@ -614,7 +754,7 @@ async def check_senior(ctx):
   return (senior_role_id and int(senior_role_id) in role_ids) or ctx.author.guild_permissions.manage_messages
 
 
-# --- Configuration Commands ---
+# --- Configuration Commands (Prefix & Slash Setup) ---
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setappeal(ctx, channel: discord.TextChannel):
@@ -648,6 +788,42 @@ async def setjail(ctx, role: discord.Role):
 async def setlogs(ctx, channel: discord.TextChannel):
   set_config(ctx.guild.id, "log_channel", channel.id)
   await ctx.send(f"Logs channel set to {channel.mention}")
+
+
+# --- Application Setup Slash Commands ---
+@bot.tree.command(name="setupapps", description="Deploy the application panel and configure the review channel.")
+@discord.app_commands.describe(
+    panel_channel="The channel where users will see the application dropdown menu",
+    review_channel="The staff channel where completed applications will be sent for review"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def setupapps(interaction: discord.Interaction, panel_channel: discord.TextChannel, review_channel: discord.TextChannel):
+  # Save the review channel config
+  set_config(interaction.guild.id, "app_log_channel", review_channel.id)
+
+  # Build & send the public panel
+  embed = discord.Embed(
+      title="📋 Community Applications",
+      description=(
+          "Want to join our team or contribute to the community? "
+          "Select an application category from the dropdown menu below to get started!\n\n"
+          "• **Trial Moderator:** Moderate chat and keep the server safe.\n"
+          "• **Content Creator:** Create videos, streams, or graphics.\n"
+          "• **Event Host:** Run community events and giveaways.\n"
+          "• **Developer:** Assist with coding and bot upkeep."
+      ),
+      color=discord.Color.blurple(),
+      timestamp=discord.utils.utcnow()
+  )
+  embed.set_footer(text=interaction.guild.name, icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
+
+  view = ApplicationPanelView()
+  await panel_channel.send(embed=embed, view=view)
+
+  await interaction.response.send_message(
+      f"✅ Application panel successfully deployed to {panel_channel.mention}!\nReview channel set to {review_channel.mention}.",
+      ephemeral=True
+  )
 
 
 # --- Leveling System Config Commands ---
@@ -779,6 +955,7 @@ async def announcebot(ctx):
       name="🛠️ What Can It Do?",
       value=(
           "• **Ticket Support:** Open private tickets using our interactive panel.\n"
+          "• **Applications:** Apply for staff, creator, or event roles via slash commands.\n"
           "• **Leveling System:** Earn XP by chatting and unlock exclusive milestone roles.\n"
           "• **Giveaways:** Participate in exciting community giveaways easily.\n"
           "• **Moderation & Security:** Keeps the community safe and clean."
@@ -788,7 +965,7 @@ async def announcebot(ctx):
 
   embed.add_field(
       name="📌 Quick Tip",
-      value="All bot commands use the prefix `!`. Feel free to explore and enjoy!",
+      value="All regular bot commands use `!`, and panel setups use slash commands like `/setupapps`!",
       inline=False
   )
 
@@ -962,7 +1139,6 @@ async def check_warns(ctx, member: discord.Member = None):
   await ctx.send(embed=embed)
 
 
-# --- FIXED MUTE COMMAND ---
 @bot.command()
 async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided"):
   if not await check_staff(ctx):
@@ -987,7 +1163,6 @@ async def mute(ctx, member: discord.Member, *, reason: str = "No reason provided
   await ctx.send(f"Muted {member.mention} for: {reason}")
 
 
-# --- FIXED MODSTATS COMMAND ---
 @bot.command(name="ms")
 async def modstats(ctx, member: discord.Member = None):
   target = member or ctx.author
@@ -1058,6 +1233,14 @@ async def on_message(message):
 async def on_ready():
   if not check_giveaways.is_running():
     check_giveaways.start()
+  
+  # Sync application / slash commands globally or per-guild
+  try:
+    await bot.tree.sync()
+    print("Successfully synced application slash commands.")
+  except Exception as e:
+    print(f"Failed to sync slash commands: {e}")
+
   print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 
