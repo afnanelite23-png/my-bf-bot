@@ -904,20 +904,20 @@ async def setstaffrole(ctx, role: discord.Role):
   await ctx.send(f"Ticket staff role set to {role.mention}")
 
 
-# --- Giveaway Admin Commands ---
-@bot.command(name="gstart")
-@commands.has_permissions(administrator=True)
-async def gstart(ctx, channel: discord.TextChannel, time_str: str, winners_count: int, *, prize: str):
-  # Safely delete command message if permissions allow
-  try:
-    await ctx.message.delete()
-  except Exception:
-    pass
-
+# --- Giveaway Slash Command ---
+@bot.tree.command(name="gstart", description="Start a community giveaway.")
+@discord.app_commands.describe(
+    channel="The channel where the giveaway will be posted",
+    duration="How long the giveaway runs (e.g., 30s, 10m, 2h, 1d)",
+    winners="The number of winners to pick",
+    prize="The prize being given away"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def gstart(interaction: discord.Interaction, channel: discord.TextChannel, duration: str, winners: int, prize: str):
   seconds = 0
-  match = re.match(r"(\d+)([smhd])", time_str)
+  match = re.match(r"(\d+)([smhd])", duration)
   if not match:
-    await ctx.send("❌ Invalid time format! Use `s`, `m`, `h`, or `d` (e.g., `10m`, `2h`).", delete_after=10)
+    await interaction.response.send_message("❌ Invalid duration format! Use `s`, `m`, `h`, or `d` (e.g., `10m`, `2h`).", ephemeral=True)
     return
 
   amount, unit = match.groups()
@@ -934,18 +934,25 @@ async def gstart(ctx, channel: discord.TextChannel, time_str: str, winners_count
   end_time = datetime.now(timezone.utc) + discord.utils.timedelta(seconds=seconds)
   timestamp_unix = int(end_time.timestamp())
 
+  await interaction.response.send_message(f"✅ Starting giveaway in {channel.mention}...", ephemeral=True)
+
   embed = discord.Embed(
       title="🎉 **GIVEAWAY** 🎉",
-      description=f"Prize: **{prize}**\nHosted by: {ctx.author.mention}\nWinners: **{winners_count}**\nEnds: <t:{timestamp_unix}:R> (<t:{timestamp_unix}:F>)",
+      description=f"Prize: **{prize}**\nHosted by: {interaction.user.mention}\nWinners: **{winners}**\nEnds: <t:{timestamp_unix}:R> (<t:{timestamp_unix}:F>)",
       color=discord.Color.gold(),
       timestamp=discord.utils.utcnow()
   )
 
-  view = GiveawayView(ctx.guild.id, 0)
-  g_msg = await channel.send(embed=embed, view=view)
+  view = GiveawayView(interaction.guild.id, 0)
+  
+  try:
+    g_msg = await channel.send(embed=embed, view=view)
+  except Exception as e:
+    print(f"Failed to send giveaway message: {e}")
+    return
 
   data = load_data()
-  g_id_str = str(ctx.guild.id)
+  g_id_str = str(interaction.guild.id)
   m_id_str = str(g_msg.id)
 
   if g_id_str not in data["giveaways"]:
@@ -953,7 +960,7 @@ async def gstart(ctx, channel: discord.TextChannel, time_str: str, winners_count
 
   data["giveaways"][g_id_str][m_id_str] = {
       "prize": prize,
-      "winners_count": winners_count,
+      "winners_count": winners,
       "end_time": end_time.isoformat(),
       "channel_id": channel.id,
       "participants": [],
@@ -963,19 +970,6 @@ async def gstart(ctx, channel: discord.TextChannel, time_str: str, winners_count
 
   view.message_id = g_msg.id
   await g_msg.edit(view=view)
-  await ctx.send(f"✅ Giveaway successfully started in {channel.mention}!", delete_after=5)
-
-
-@gstart.error
-async def gstart_error(ctx, error):
-  if isinstance(error, commands.MissingPermissions):
-    await ctx.send("❌ You do not have permission to use this command.", delete_after=5)
-  elif isinstance(error, commands.MissingRequiredArgument):
-    await ctx.send("❌ Missing arguments! Format: `!gstart #channel duration winners prize`", delete_after=10)
-  elif isinstance(error, commands.BadArgument):
-    await ctx.send("❌ Invalid argument provided (make sure you mention a valid channel and numbers for winners).", delete_after=10)
-  else:
-    print(f"Error in gstart: {error}")
 
 
 # --- Bot Announcement Command for Staff ---
@@ -1014,7 +1008,7 @@ async def announcebot(ctx):
 
   embed.add_field(
       name="📌 Quick Tip",
-      value="All regular bot commands use `!`, and panel setups use slash commands like `/setupapps`!",
+      value="All regular bot commands use `!`, and panel setups use slash commands like `/setupapps` and `/gstart`!",
       inline=False
   )
 
@@ -1304,4 +1298,3 @@ if __name__ == "__main__":
   if not TOKEN:
     raise ValueError("No DIS_TOKEN environment variable found. Please set your bot token in Render's Environment settings.")
   bot.run(TOKEN)
-
