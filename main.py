@@ -158,6 +158,47 @@ def duration_seconds(value):
     return seconds if seconds <= 28 * 86400 else None
 
 
+def parse_level_roles(value):
+    """Parse comma-separated Fruit:Level entries; Flame | Lv. 1 is always included."""
+    roles = [("Flame", 1)]
+    seen = {"flame"}
+    if not value.strip():
+        return roles
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(f"Use Fruit:Level format for {item!r}, for example Lightning:30.")
+        fruit, level_text = item.rsplit(":", 1)
+        fruit = fruit.strip()
+        if not fruit or len(fruit) > 80:
+            raise ValueError("Fruit names must contain 1 to 80 characters.")
+        if not level_text.strip().isdigit() or int(level_text.strip()) < 1:
+            raise ValueError(f"Level for {fruit} must be a positive whole number.")
+        if fruit.casefold() in seen:
+            if fruit.casefold() == "flame" and int(level_text.strip()) == 1:
+                continue
+            raise ValueError(f"{fruit} appears more than once.")
+        seen.add(fruit.casefold())
+        roles.append((fruit, int(level_text.strip())))
+    return sorted(roles, key=lambda item: (item[1], item[0].casefold()))
+
+
+async def create_level_roles(guild, entries):
+    existing = {role.name.casefold() for role in guild.roles}
+    created, already = [], []
+    for fruit, level in entries:
+        role_name = f"{fruit} | Lv. {level}"
+        if role_name.casefold() in existing:
+            already.append(role_name)
+            continue
+        role = await guild.create_role(name=role_name, reason="Level roles created by administrator command")
+        created.append(role.name)
+        existing.add(role_name.casefold())
+    return created, already
+
+
 class AppealStartView(discord.ui.View):
     def __init__(self, guild_id, user_id):
         super().__init__(timeout=None)
@@ -404,7 +445,7 @@ async def unjail(interaction: discord.Interaction, user: discord.User, reason: s
     await log_action(interaction.guild, data, "Member unjailed",
                      f"Member: {user} ({user.id})\nStaff: {interaction.user}\nNote: {note[:500]}\n"
                      f"Roles restored: {len(restored)}\nDM delivered: {'Yes' if dm_ok else 'No'}", OK)
-    await interaction.response.send_message(embed=make_embed("Moderation Bot",
+    await interaction.response.send_message(embed=make_embed("Moderation Bot", 
         f"{user.mention} released; {len(restored)} saved role(s) restored.{'' if dm_ok else ' DM could not be delivered.'}"), ephemeral=True)
 
 
@@ -509,6 +550,37 @@ async def setlogs(interaction: discord.Interaction, channel: discord.TextChannel
     get_data(interaction.guild_id)["config"]["logs_channel_id"] = channel.id
     save_data()
     await interaction.response.send_message(embed=make_embed("Moderation Bot", f"Moderation logs will be sent to {channel.mention}."), ephemeral=True)
+
+
+@bot.tree.command(name="createlevels", description="Create Blox Fruits level roles from fruit:level pairs.")
+@app_commands.describe(fruits_and_levels="Comma-separated pairs, for example Lightning:30, Ice:60. Flame | Lv. 1 is added automatically.")
+@app_commands.default_permissions(administrator=True)
+async def createlevels(interaction: discord.Interaction, fruits_and_levels: str):
+    if not await admin_check(interaction):
+        return
+    try:
+        entries = parse_level_roles(fruits_and_levels)
+        created, already = await create_level_roles(interaction.guild, entries)
+    except ValueError as exc:
+        await interaction.response.send_message(
+            embed=make_embed("Invalid level list", str(exc), ERROR), ephemeral=True
+        )
+        return
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        await interaction.response.send_message(
+            embed=make_embed("Role creation failed", f"Check the bot's Manage Roles permission and role position. {exc}", ERROR),
+            ephemeral=True,
+        )
+        return
+    summary = []
+    if created:
+        summary.append("Created:\n" + "\n".join(created))
+    if already:
+        summary.append("Already existed:\n" + "\n".join(already))
+    await interaction.response.send_message(
+        embed=make_embed("Level roles ready", "\n\n".join(summary) or "No roles needed to be created.", OK),
+        ephemeral=True,
+    )
 
 
 @bot.event
@@ -698,12 +770,35 @@ async def prefix_setlogs(ctx, channel: discord.TextChannel):
     await ctx.send(embed=make_embed("Setting saved", f"Moderation logs will be sent to {channel.mention}.", OK))
 
 
+@bot.command(name="createlevels")
+async def prefix_createlevels(ctx, *, fruits_and_levels: str):
+    if not await prefix_allowed(ctx, admin=True):
+        return
+    try:
+        entries = parse_level_roles(fruits_and_levels)
+        created, already = await create_level_roles(ctx.guild, entries)
+    except ValueError as exc:
+        await ctx.send(embed=make_embed("Invalid level list", str(exc), ERROR))
+        return
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        await ctx.send(embed=make_embed("Role creation failed",
+                                        f"Check the bot's Manage Roles permission and role position. {exc}", ERROR))
+        return
+    summary = []
+    if created:
+        summary.append("Created:\n" + "\n".join(created))
+    if already:
+        summary.append("Already existed:\n" + "\n".join(already))
+    await ctx.send(embed=make_embed("Level roles ready", "\n\n".join(summary) or "No roles needed to be created.", OK))
+
+
 @bot.command(name="help")
 async def prefix_help(ctx):
     commands_text = (
         ";jail @member reason + attach proof\n"
         ";unjail @member [note]\n;flame @member\n;warn @member reason\n;mute @member 10m reason\n"
         ";setflame @role\n;setappealchan #channel\n;setseniormod @role\n;setstaff @role\n;setlogs #channel\n"
+        ";createlevels Lightning:30, Ice:60 (admins; Flame | Lv. 1 is added automatically)\n"
         "Slash commands are also available. Configuration commands require an administrator; moderation commands require staff."
     )
     await ctx.send(embed=make_embed("Moderation Bot Commands", commands_text))
